@@ -59,6 +59,9 @@ brazilianportuguese.AppDescription=Conversor interno Vexper para leitura de banc
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na area de trabalho"; GroupDescription: "Atalhos adicionais:"; Flags: unchecked
 
+[InstallDelete]
+Type: files; Name: "{app}\CONVERSOR - VEXPER atualizado.exe"
+
 [Files]
 Source: "{#MyAppSourceExe}"; DestDir: "{app}"; Flags: ignoreversion
 
