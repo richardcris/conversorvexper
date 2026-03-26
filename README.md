@@ -47,7 +47,7 @@ build_exe.bat
 O executavel sera criado em:
 
 ```text
-dist\CONVERSOR - VEXPER atualizado.exe
+dist\CONVERSOR - VEXPER.exe
 ```
 
 ## Gerar instalador
@@ -60,6 +60,10 @@ Saida:
 
 ```text
 installer\Instalador CONVERSOR - VEXPER.exe
+
+Arquivos gerados:
+- `dist\CONVERSOR - VEXPER.exe`: executavel do sistema
+- `installer\Instalador CONVERSOR - VEXPER.exe`: instalador do sistema
 ```
 
 ## Atualizacao automatica via GitHub

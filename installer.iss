@@ -3,8 +3,8 @@
 #define MyAppName "CONVERSOR - VEXPER"
 #define MyAppPublisher "Vexper Sistemas"
 #define MyAppURL "https://vexper.local"
-#define MyAppExeName "CONVERSOR - VEXPER atualizado.exe"
-#define MyAppSourceExe "dist\\CONVERSOR - VEXPER atualizado.exe"
+#define MyAppExeName "CONVERSOR - VEXPER.exe"
+#define MyAppSourceExe "dist\\CONVERSOR - VEXPER.exe"
 
 [Setup]
 AppId={{A2D3AC9C-2B40-4D18-9E44-5B98D3EB0F11}
