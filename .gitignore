@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+build/
+dist/
+installer/
+update_feed/
+
+*.spec
+build_version.txt
+installer_version.iss
+installer_small.bmp
+installer_wizard.bmp
+
+Banco de Dados Cavalcante/
+PLANILHA MODELO.rar
+
+.vscode/
+.idea/
+
+*.log
+Thumbs.db
+Desktop.ini

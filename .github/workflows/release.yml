@@ -1,0 +1,79 @@
+name: Build And Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    env:
+      VEXPER_GITHUB_REPO: ${{ github.repository }}
+      VEXPER_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup -y
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Generate Build Metadata
+        shell: powershell
+        run: |
+          python generate_build_metadata.py
+          $version = Get-Content build_version.txt -Raw
+          "APP_VERSION=$($version.Trim())" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Generate Icon
+        run: |
+          python -c "from pathlib import Path; from PIL import Image; logo = Path('logo.png'); icon = Path('logo.ico'); image = Image.open(logo).convert('RGBA'); image.save(icon, format='ICO', sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])"
+
+      - name: Build Executable
+        shell: powershell
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name "CONVERSOR - VEXPER atualizado" --icon "logo.ico" --add-data "logo.png;." --add-data "PLANILHA MODELO;PLANILHA MODELO" app.py
+
+      - name: Generate Installer Assets
+        run: python generate_installer_assets.py
+
+      - name: Build Installer
+        shell: powershell
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer.iss"
+
+      - name: Publish Update Feed And Release Assets
+        run: python publish_update.py
+
+      - name: Upload Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversor-vexper-release
+          path: |
+            dist/CONVERSOR - VEXPER atualizado.exe
+            installer/Instalador CONVERSOR - VEXPER.exe
+            update_feed/latest.json
+
+      - name: Summary
+        shell: powershell
+        run: |
+          Write-Host "Versao publicada: $env:APP_VERSION"
+
