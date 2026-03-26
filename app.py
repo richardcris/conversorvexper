@@ -34,7 +34,7 @@ ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 APP_TITLE = "CONVERSOR - VEXPER"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 WINDOW_SIZE = "1240x760"
 PREVIEW_LIMIT = 100
 EXPORT_BATCH_SIZE = 2000
@@ -422,12 +422,31 @@ def play_completion_sound() -> None:
         pass
 
 
-def build_glow_logo(size: tuple[int, int]) -> Image.Image | None:
+def load_logo_rgba() -> Image.Image | None:
     logo_path = resource_path("logo.png")
     if not logo_path.exists():
         return None
 
     logo = Image.open(logo_path).convert("RGBA")
+    cleaned_pixels = []
+    changed = False
+    for red, green, blue, alpha in logo.getdata():
+        if alpha > 0 and red <= 24 and green <= 24 and blue <= 24:
+            cleaned_pixels.append((red, green, blue, 0))
+            changed = True
+        else:
+            cleaned_pixels.append((red, green, blue, alpha))
+
+    if changed:
+        logo.putdata(cleaned_pixels)
+    return logo
+
+
+def build_glow_logo(size: tuple[int, int]) -> Image.Image | None:
+    logo = load_logo_rgba()
+    if logo is None:
+        return None
+
     logo.thumbnail(size, Image.LANCZOS)
 
     canvas_size = (logo.width + 84, logo.height + 84)
@@ -1192,13 +1211,15 @@ class App(ctk.CTk):
     def _show_login_window(self) -> None:
         self.login_window = LoginWindow(self)
         self.login_window.grab_set()
+        self._start_update_check()
 
     def on_login_success(self, username: str) -> None:
         self.current_user = username
         self.deiconify()
         self.user_label.configure(text=f"Usuario: {username}")
         self.status_label.configure(text=f"Acesso liberado para {username}. Selecione um banco para iniciar.")
-        self._start_update_check()
+        if self.pending_update is not None:
+            self.after(250, lambda: self._prompt_update_package(self.pending_update))
 
     def _start_update_check(self) -> None:
         if not bool(self.preferences.get("auto_update_enabled", True)):
@@ -1250,6 +1271,24 @@ class App(ctk.CTk):
         subprocess.Popen(["cmd", "/c", str(updater_script)], creationflags=creationflags)
         self.after(300, self.destroy)
 
+    def _prompt_update_package(self, package: UpdatePackage | None) -> None:
+        if package is None:
+            return
+        if not self.current_user:
+            return
+
+        answer = messagebox.askyesno(
+            "Atualizacao disponivel",
+            f"Foi encontrada a versao {package.version}.\n\n{package.notes}\n\nDeseja atualizar agora?",
+            parent=self,
+        )
+        if answer:
+            self.status_label.configure(text=f"Atualizacao {package.version} encontrada. Instalando nova versao...")
+            self._install_update_package(package)
+            return
+
+        self.status_label.configure(text=f"Atualizacao {package.version} identificada. Voce pode atualizar depois nas proximas aberturas do sistema.")
+
     def _build_layout(self) -> None:
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -1273,6 +1312,18 @@ class App(ctk.CTk):
             pady=4,
         )
         self.badge_label.pack(anchor="w", pady=(0, 6))
+
+        self.version_label = ctk.CTkLabel(
+            self.header_text_frame,
+            text=f"Versao {APP_VERSION}",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#DCE6F2",
+            fg_color=self.theme["header_alt"],
+            corner_radius=999,
+            padx=12,
+            pady=3,
+        )
+        self.version_label.pack(anchor="w", pady=(0, 8))
 
         title = ctk.CTkLabel(
             self.header_text_frame,
@@ -1314,11 +1365,8 @@ class App(ctk.CTk):
         )
         self.settings_button.pack(anchor="e")
 
-        self.brand_panel = ctk.CTkFrame(self.header, fg_color=self.theme["header_alt"], corner_radius=18, border_width=1, border_color=self.theme["border"])
-        self.brand_panel.place(relx=0.64, rely=0.5, anchor="center")
-
-        self.brand_glow_label = ctk.CTkLabel(self.brand_panel, text="", image=self.header_logo_image)
-        self.brand_glow_label.pack(padx=10, pady=4)
+        self.brand_glow_label = ctk.CTkLabel(self.header, text="", image=self.header_logo_image, fg_color="transparent")
+        self.brand_glow_label.place(relx=0.64, rely=0.5, anchor="center")
 
         self.sidebar = ctk.CTkFrame(self, width=332, corner_radius=20, fg_color=self.theme["surface"])
         self.sidebar.grid(row=1, column=0, padx=(18, 10), pady=14, sticky="nsew")
@@ -1874,8 +1922,8 @@ class App(ctk.CTk):
             elif kind == "update_ready":
                 package = payload
                 self.pending_update = package
-                self.status_label.configure(text=f"Atualizacao {package.version} encontrada. Instalando nova versao...")
-                self._install_update_package(package)
+                self.status_label.configure(text=f"Atualizacao {package.version} identificada. Escolha quando deseja instalar.")
+                self._prompt_update_package(package)
             elif kind == "update_error":
                 # Falha silenciosa para nao atrapalhar o uso do sistema.
                 pass
@@ -2002,7 +2050,7 @@ class App(ctk.CTk):
         self.configure(fg_color=self.theme["app_bg"])
         self.header.configure(fg_color=self.theme["header"])
         self.badge_label.configure(text_color=self.theme["badge"], fg_color=self.theme["header_alt"])
-        self.brand_panel.configure(fg_color=self.theme["header_alt"], border_color=self.theme["border"])
+        self.version_label.configure(text_color="#DCE6F2", fg_color=self.theme["header_alt"])
         self.sidebar.configure(fg_color=self.theme["surface"])
         self.content.configure(fg_color=self.theme["surface"])
         self.list_frame.configure(bg=self.theme["surface"])
@@ -2072,7 +2120,7 @@ class App(ctk.CTk):
             ("Tocar som ao finalizar exportacao", sound_var),
             ("Ler estrutura automaticamente ao escolher o banco", auto_scan_var),
             ("Manter login salvo neste computador", remember_var),
-            ("Atualizar o sistema automaticamente", auto_update_var),
+            ("Verificar atualizacoes ao abrir o sistema", auto_update_var),
         ):
             ctk.CTkCheckBox(
                 self.settings_window,
