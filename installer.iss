@@ -69,3 +69,40 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Abrir {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+var
+	InfoPage: TWizardPage;
+	InfoTitle: TNewStaticText;
+	InfoText: TNewStaticText;
+
+procedure InitializeWizard;
+begin
+	InfoPage := CreateCustomPage(wpWelcome, 'Preparacao da instalacao', 'Resumo do que sera instalado neste computador');
+
+	InfoTitle := TNewStaticText.Create(InfoPage);
+	InfoTitle.Parent := InfoPage.Surface;
+	InfoTitle.Left := ScaleX(0);
+	InfoTitle.Top := ScaleY(6);
+	InfoTitle.Width := InfoPage.SurfaceWidth;
+	InfoTitle.Height := ScaleY(24);
+	InfoTitle.Caption := 'CONVERSOR - VEXPER';
+	InfoTitle.Font.Style := [fsBold];
+	InfoTitle.Font.Size := 12;
+
+	InfoText := TNewStaticText.Create(InfoPage);
+	InfoText.Parent := InfoPage.Surface;
+	InfoText.Left := ScaleX(0);
+	InfoText.Top := ScaleY(38);
+	InfoText.Width := InfoPage.SurfaceWidth;
+	InfoText.Height := ScaleY(170);
+	InfoText.AutoSize := False;
+	InfoText.WordWrap := True;
+	InfoText.Caption :=
+		'Este instalador vai configurar o sistema completo da Vexper para leitura de banco Firebird e exportacao Excel padronizada.' + #13#10 + #13#10 +
+		'- instala a versao atual do sistema' + #13#10 +
+		'- substitui a versao anterior quando ela existir' + #13#10 +
+		'- cria atalhos do aplicativo' + #13#10 +
+		'- mantem suporte a atualizacao automatica' + #13#10 + #13#10 +
+		'Ao finalizar, o sistema ja podera ser aberto normalmente. Em futuras atualizacoes, a nova versao podera ser instalada por cima da antiga.';
+end;
