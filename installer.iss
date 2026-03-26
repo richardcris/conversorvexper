@@ -4,7 +4,7 @@
 #define MyAppPublisher "Vexper Sistemas"
 #define MyAppURL "https://vexper.local"
 #define MyAppExeName "CONVERSOR - VEXPER.exe"
-#define MyAppSourceExe "dist\\CONVERSOR - VEXPER.exe"
+#define MyAppSourceDir "dist\\CONVERSOR - VEXPER"
 
 [Setup]
 AppId={{A2D3AC9C-2B40-4D18-9E44-5B98D3EB0F11}
@@ -61,9 +61,15 @@ Name: "desktopicon"; Description: "Criar atalho na area de trabalho"; GroupDescr
 
 [InstallDelete]
 Type: files; Name: "{app}\CONVERSOR - VEXPER atualizado.exe"
+Type: files; Name: "{app}\*.dll"
+Type: files; Name: "{app}\*.pyd"
+Type: files; Name: "{app}\*.pkg"
+Type: files; Name: "{app}\base_library.zip"
+Type: files; Name: "{app}\python*.dll"
+Type: files; Name: "{app}\VCRUNTIME*.dll"
 
 [Files]
-Source: "{#MyAppSourceExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MyAppSourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -104,6 +104,19 @@ def upload_release_asset(repo: str, release: dict[str, object], asset_path: Path
     )
 
 
+def release_asset_download_url(release: dict[str, object], asset_name: str) -> str | None:
+    normalized_target = asset_name.replace(" ", ".")
+    for asset in release.get("assets", []) or []:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name", ""))
+        if name == asset_name or name == normalized_target:
+            url = str(asset.get("browser_download_url", "")).strip()
+            if url:
+                return url
+    return None
+
+
 def publish_github_release(manifest_path: Path) -> None:
     repo = github_repository()
     token = github_token()
@@ -114,7 +127,21 @@ def publish_github_release(manifest_path: Path) -> None:
     tag = f"v{app.APP_VERSION}"
     release = ensure_github_release(repo, tag)
     upload_release_asset(repo, release, INSTALLER_PATH, "application/octet-stream")
-    upload_release_asset(repo, release, manifest_path, "application/json")
+
+    release = ensure_github_release(repo, tag)
+    installer_url = release_asset_download_url(release, app.UPDATE_INSTALLER_NAME)
+    github_manifest = {
+        "app_name": app.APP_TITLE,
+        "version": app.APP_VERSION,
+        "installer_name": app.UPDATE_INSTALLER_NAME,
+        "installer_location": installer_url or app.UPDATE_INSTALLER_NAME,
+        "notes": release_notes(),
+        "published_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    github_manifest_path = manifest_path.parent / "latest.json"
+    github_manifest_path.write_text(json.dumps(github_manifest, indent=2, ensure_ascii=True), encoding="utf-8")
+    upload_release_asset(repo, release, github_manifest_path, "application/json")
+    github_manifest_path.unlink(missing_ok=True)
     print(f"Release do GitHub atualizada em {repo} com a tag {tag}")
 
 

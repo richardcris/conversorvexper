@@ -35,7 +35,7 @@ ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 APP_TITLE = "CONVERSOR - VEXPER"
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.1.6"
 WINDOW_SIZE = "1240x760"
 PREVIEW_LIMIT = 100
 EXPORT_BATCH_SIZE = 2000
