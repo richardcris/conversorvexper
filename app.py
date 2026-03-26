@@ -34,7 +34,7 @@ ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 APP_TITLE = "CONVERSOR - VEXPER"
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 WINDOW_SIZE = "1240x760"
 PREVIEW_LIMIT = 100
 EXPORT_BATCH_SIZE = 2000
@@ -47,6 +47,7 @@ UPDATE_MANIFEST_NAME = "latest.json"
 UPDATE_FEED_DIRNAME = "update_feed"
 UPDATE_INSTALLER_NAME = "Instalador CONVERSOR - VEXPER.exe"
 GITHUB_RELEASES_LATEST_SUFFIX = "/releases/latest/download/"
+DEFAULT_GITHUB_REPO = "richardcris/conversorvexper"
 
 TEMPLATE_TABLE_ALIASES = {
     "TRANSPORTADORA": "transportadoras",
@@ -314,7 +315,7 @@ def default_update_feed() -> str:
     if env_feed:
         return env_feed
 
-    github_repo = os.environ.get("VEXPER_GITHUB_REPO", "").strip().strip("/")
+    github_repo = os.environ.get("VEXPER_GITHUB_REPO", DEFAULT_GITHUB_REPO).strip().strip("/")
     if github_repo:
         return f"https://github.com/{github_repo}{GITHUB_RELEASES_LATEST_SUFFIX}"
 
