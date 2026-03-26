@@ -35,7 +35,7 @@ ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 APP_TITLE = "CONVERSOR - VEXPER"
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 WINDOW_SIZE = "1240x760"
 PREVIEW_LIMIT = 100
 EXPORT_BATCH_SIZE = 2000
@@ -325,6 +325,19 @@ def default_update_feed() -> str:
     return str((application_base_dir() / UPDATE_FEED_DIRNAME).resolve())
 
 
+def normalize_update_feed(feed: str) -> str:
+    value = feed.strip()
+    if not value:
+        return default_update_feed()
+
+    parsed = parse_github_release_feed(value)
+    if parsed is None:
+        return value
+
+    repo, _tag = parsed
+    return f"https://github.com/{repo}{GITHUB_RELEASES_LATEST_SUFFIX}"
+
+
 def is_remote_source(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"}
@@ -491,6 +504,7 @@ def load_preferences() -> dict[str, object]:
     if not isinstance(loaded, dict):
         return defaults
     defaults.update(loaded)
+    defaults["update_feed"] = normalize_update_feed(str(defaults.get("update_feed", "")))
     return defaults
 
 
