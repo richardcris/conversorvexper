@@ -16,8 +16,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from urllib.error import HTTPError
 from urllib.parse import urljoin, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import customtkinter as ctk
 import firebirdsql
@@ -34,7 +35,7 @@ ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 APP_TITLE = "CONVERSOR - VEXPER"
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 WINDOW_SIZE = "1240x760"
 PREVIEW_LIMIT = 100
 EXPORT_BATCH_SIZE = 2000
@@ -48,6 +49,8 @@ UPDATE_FEED_DIRNAME = "update_feed"
 UPDATE_INSTALLER_NAME = "Instalador CONVERSOR - VEXPER.exe"
 GITHUB_RELEASES_LATEST_SUFFIX = "/releases/latest/download/"
 DEFAULT_GITHUB_REPO = "richardcris/conversorvexper"
+POST_UPDATE_NOTICE_NAME = ".vexper_post_update.json"
+GITHUB_API = "https://api.github.com"
 
 TEMPLATE_TABLE_ALIASES = {
     "TRANSPORTADORA": "transportadoras",
@@ -354,7 +357,69 @@ def read_text_source(source: str) -> str:
     return Path(source).read_text(encoding="utf-8")
 
 
-def resolve_installer_source(feed: str, location: str) -> str:
+def github_api_json(url: str) -> dict[str, object]:
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "vexper-updater",
+        },
+    )
+    with urlopen(request, timeout=30) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Resposta invalida da API do GitHub.")
+    return data
+
+
+def parse_github_release_feed(feed: str) -> tuple[str, str | None] | None:
+    pattern = re.compile(r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/releases/(?:(?P<latest>latest)/download|download/(?P<tag>[^/]+))/?$", re.IGNORECASE)
+    match = pattern.match(feed.strip())
+    if not match:
+        return None
+    repo = f"{match.group('owner')}/{match.group('repo')}"
+    tag = match.group("tag")
+    return repo, tag
+
+
+def load_github_release_manifest(feed: str) -> dict[str, object] | None:
+    parsed = parse_github_release_feed(feed)
+    if parsed is None:
+        return None
+
+    repo, tag = parsed
+    release_url = f"{GITHUB_API}/repos/{repo}/releases/latest" if tag is None else f"{GITHUB_API}/repos/{repo}/releases/tags/{tag}"
+    release = github_api_json(release_url)
+    assets = {
+        str(asset.get("name", "")): str(asset.get("browser_download_url", ""))
+        for asset in release.get("assets", []) or []
+        if isinstance(asset, dict)
+    }
+
+    manifest_source = assets.get(UPDATE_MANIFEST_NAME)
+    if not manifest_source:
+        raise ValueError("Manifesto latest.json nao encontrado na release do GitHub.")
+
+    manifest_content = read_text_source(manifest_source)
+    manifest = json.loads(manifest_content)
+    if not isinstance(manifest, dict):
+        raise ValueError("Manifesto de atualizacao invalido.")
+
+    release_notes = str(release.get("body", "")).strip()
+    if release_notes:
+        manifest["notes"] = release_notes
+    manifest["_asset_map"] = assets
+    return manifest
+
+
+def resolve_installer_source(feed: str, location: str, manifest: dict[str, object] | None = None) -> str:
+    if manifest is not None:
+        asset_map = manifest.get("_asset_map")
+        if isinstance(asset_map, dict):
+            resolved = asset_map.get(location)
+            if isinstance(resolved, str) and resolved.strip():
+                return resolved
     if is_remote_source(location):
         return location
     if is_remote_source(feed):
@@ -372,12 +437,35 @@ def fetch_binary_source(source: str, target: Path) -> None:
 
 
 def load_update_manifest(feed: str) -> dict[str, object]:
+    github_manifest = load_github_release_manifest(feed)
+    if github_manifest is not None:
+        return github_manifest
+
     manifest_source = resolve_manifest_source(feed)
     content = read_text_source(manifest_source)
     data = json.loads(content)
     if not isinstance(data, dict):
         raise ValueError("Manifesto de atualizacao invalido.")
     return data
+
+
+def post_update_notice_path() -> Path:
+    return application_base_dir() / POST_UPDATE_NOTICE_NAME
+
+
+def consume_post_update_notice() -> dict[str, object] | None:
+    marker = post_update_notice_path()
+    if not marker.exists():
+        return None
+    try:
+        content = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        content = None
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return content if isinstance(content, dict) else None
 
 
 def load_preferences() -> dict[str, object]:
@@ -1131,21 +1219,82 @@ class SplashScreen(ctk.CTkToplevel):
         self.status.pack()
 
         self._alpha = 0.0
-        self._progress_value = 0.0
+        self._progress_value = 0.12
         self.after(20, self.animate)
 
     def animate(self) -> None:
         self._alpha = min(1.0, self._alpha + 0.06)
-        self._progress_value = min(1.0, self._progress_value + 0.04)
         self.attributes("-alpha", self._alpha)
         self.progress.set(self._progress_value)
 
-        if self._progress_value < 1.0:
+        if self.winfo_exists():
             self.after(35, self.animate)
-            return
 
-        self.status.configure(text="Interface pronta")
-        self.after(350, self.destroy)
+    def update_visuals(
+        self,
+        *,
+        title: str | None = None,
+        subtitle: str | None = None,
+        status: str | None = None,
+        progress: float | None = None,
+    ) -> None:
+        if title is not None:
+            self.title_label.configure(text=title)
+        if subtitle is not None:
+            self.subtitle_label.configure(text=subtitle)
+        if status is not None:
+            self.status.configure(text=status)
+        if progress is not None:
+            self._progress_value = max(0.0, min(1.0, progress))
+            self.progress.set(self._progress_value)
+
+    def close_with_message(self, status: str, delay_ms: int = 280) -> None:
+        self.update_visuals(status=status, progress=1.0)
+        self.after(delay_ms, self.destroy)
+
+
+class WhatsNewWindow(ctk.CTkToplevel):
+    def __init__(self, master: "App", version: str, notes: str) -> None:
+        super().__init__(master)
+        self.title("Novidades da versao")
+        self.geometry("640x460+430+130")
+        self.resizable(False, False)
+        self.configure(fg_color=master.theme["surface"])
+        self.transient(master)
+        self.attributes("-topmost", True)
+
+        card = ctk.CTkFrame(self, corner_radius=24, fg_color=master.theme["surface_alt"])
+        card.pack(fill="both", expand=True, padx=18, pady=18)
+
+        ctk.CTkLabel(
+            card,
+            text=f"Nova versao instalada: {version}",
+            font=ctk.CTkFont(family="Segoe UI", size=26, weight="bold"),
+            text_color=master.theme["text"],
+        ).pack(anchor="w", padx=24, pady=(24, 8))
+
+        ctk.CTkLabel(
+            card,
+            text="Seu sistema foi atualizado automaticamente. Confira as novidades desta entrega:",
+            font=ctk.CTkFont(family="Segoe UI", size=14),
+            text_color=master.theme["muted"],
+            justify="left",
+        ).pack(anchor="w", padx=24)
+
+        notes_box = ctk.CTkTextbox(card, corner_radius=18, fg_color=master.theme["surface"], text_color=master.theme["text"])
+        notes_box.pack(fill="both", expand=True, padx=24, pady=(20, 16))
+        notes_box.insert("1.0", notes.strip() or "Melhorias gerais de interface, atualizacao automatica e estabilidade.")
+        notes_box.configure(state="disabled")
+
+        ctk.CTkButton(
+            card,
+            text="Continuar",
+            height=42,
+            corner_radius=14,
+            fg_color=master.theme["accent"],
+            hover_color=master.theme["accent_hover"],
+            command=self.destroy,
+        ).pack(fill="x", padx=24, pady=(0, 22))
 
 
 class App(ctk.CTk):
@@ -1176,19 +1325,25 @@ class App(ctk.CTk):
         self.splash_logo_image = None
         self.login_window: LoginWindow | None = None
         self.settings_window: ctk.CTkToplevel | None = None
+        self.whats_new_window: WhatsNewWindow | None = None
         self.current_user = ""
         self.pending_update: UpdatePackage | None = None
+        self.post_update_notice = consume_post_update_notice()
+        self.startup_ready = False
+        self.update_started = False
+        self.manual_update_requested = False
 
         self._load_brand_assets()
         self._apply_window_icon()
 
         self.withdraw()
         self.splash = SplashScreen(self, self.splash_logo_image)
-        self.after(900, self._show_login_window)
+        self.splash.update_visuals(status="Verificando atualizacoes do sistema...", progress=0.16)
 
         self._build_layout()
         self._apply_theme()
         self.after(150, self._poll_queue)
+        self.after(220, self._start_update_check)
 
     def _load_brand_assets(self) -> None:
         header_logo = build_glow_logo((220, 82))
@@ -1210,50 +1365,75 @@ class App(ctk.CTk):
             self.window_icon = None
 
     def _show_login_window(self) -> None:
+        if self.login_window is not None and self.login_window.winfo_exists():
+            return
         self.login_window = LoginWindow(self)
         self.login_window.grab_set()
-        self._start_update_check()
+
+    def _complete_startup(self) -> None:
+        if self.startup_ready:
+            return
+        self.startup_ready = True
+        if self.splash is not None and self.splash.winfo_exists():
+            self.splash.close_with_message("Interface pronta")
+        self.after(320, self._show_login_window)
 
     def on_login_success(self, username: str) -> None:
         self.current_user = username
         self.deiconify()
         self.user_label.configure(text=f"Usuario: {username}")
         self.status_label.configure(text=f"Acesso liberado para {username}. Selecione um banco para iniciar.")
-        if self.pending_update is not None:
-            self.after(250, lambda: self._prompt_update_package(self.pending_update))
+        self._show_post_update_notice()
 
-    def _start_update_check(self) -> None:
-        if not bool(self.preferences.get("auto_update_enabled", True)):
+    def _start_update_check(self, manual: bool = False) -> None:
+        if manual:
+            self.manual_update_requested = True
+        if not manual and not bool(self.preferences.get("auto_update_enabled", True)):
+            self._complete_startup()
             return
         if self.update_thread and self.update_thread.is_alive():
+            if manual:
+                messagebox.showinfo("Atualizacao", "Ja existe uma verificacao de atualizacao em andamento.")
             return
-        self.update_thread = threading.Thread(target=self._run_update_check, daemon=True)
+        self.update_thread = threading.Thread(target=self._run_update_check, args=(manual,), daemon=True)
         self.update_thread.start()
 
-    def _run_update_check(self) -> None:
+    def _run_update_check(self, manual: bool = False) -> None:
         feed = str(self.preferences.get("update_feed", "")).strip()
         if not feed:
+            if manual:
+                self.progress_queue.put(("manual_update_error", "Feed de atualizacao nao configurado."))
+            else:
+                self.progress_queue.put(("startup_continue", None))
             return
 
         try:
+            self.progress_queue.put(("update_progress", ("Verificando atualizacoes publicadas...", 0.22)))
             manifest = load_update_manifest(feed)
             latest_version = str(manifest.get("version", "")).strip()
             if not latest_version or not is_newer_version(latest_version, APP_VERSION):
+                if manual:
+                    self.progress_queue.put(("manual_update_none", APP_VERSION))
+                else:
+                    self.progress_queue.put(("startup_continue", None))
                 return
 
             installer_name = str(manifest.get("installer_name", UPDATE_INSTALLER_NAME)).strip() or UPDATE_INSTALLER_NAME
             installer_location = str(manifest.get("installer_location", installer_name)).strip() or installer_name
             notes = str(manifest.get("notes", "Atualizacao disponivel.")).strip()
-            installer_source = resolve_installer_source(feed, installer_location)
+            installer_source = resolve_installer_source(feed, installer_location, manifest)
 
             temp_dir = Path(tempfile.gettempdir()) / "vexper_converter_update"
             target = temp_dir / installer_name
-            self.progress_queue.put(("update_progress", f"Baixando atualizacao {latest_version}..."))
+            self.progress_queue.put(("update_progress", (f"Baixando atualizacao {latest_version}...", 0.58)))
             fetch_binary_source(installer_source, target)
             package = UpdatePackage(version=latest_version, installer_source=str(target), installer_name=installer_name, notes=notes)
             self.progress_queue.put(("update_ready", package))
         except Exception as error:
-            self.progress_queue.put(("update_error", str(error)))
+            if manual:
+                self.progress_queue.put(("manual_update_error", str(error)))
+            else:
+                self.progress_queue.put(("update_error", str(error)))
 
     def _install_update_package(self, package: UpdatePackage) -> None:
         installer_path = Path(package.installer_source)
@@ -1261,34 +1441,106 @@ class App(ctk.CTk):
             messagebox.showerror("Atualizacao", "O instalador baixado nao foi encontrado.")
             return
 
-        updater_script = installer_path.with_suffix(".cmd")
-        updater_script.write_text(
-            "@echo off\n"
-            "ping 127.0.0.1 -n 3 > nul\n"
-            f'start "" "{installer_path}" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS\n',
+        install_dir = application_base_dir()
+        exe_path = install_dir / UPDATE_INSTALLER_NAME.replace("Instalador ", "")
+        notice_source = installer_path.with_name("post_update_notice.json")
+        notice_source.write_text(
+            json.dumps(
+                {
+                    "version": package.version,
+                    "notes": package.notes,
+                    "installed_at": datetime.now().isoformat(timespec="seconds"),
+                },
+                indent=2,
+                ensure_ascii=True,
+            ),
             encoding="utf-8",
         )
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(["cmd", "/c", str(updater_script)], creationflags=creationflags)
+
+        updater_script = installer_path.with_suffix(".ps1")
+        updater_script.write_text(
+            "Add-Type -AssemblyName System.Windows.Forms\n"
+            "Add-Type -AssemblyName System.Drawing\n"
+            f"$installerPath = '{str(installer_path).replace("'", "''")}'\n"
+            f"$installDir = '{str(install_dir).replace("'", "''")}'\n"
+            f"$exePath = '{str(exe_path).replace("'", "''")}'\n"
+            f"$noticeSource = '{str(notice_source).replace("'", "''")}'\n"
+            f"$noticeTarget = '{str(post_update_notice_path()).replace("'", "''")}'\n"
+            "$form = New-Object System.Windows.Forms.Form\n"
+            "$form.Text = 'Atualizando CONVERSOR - VEXPER'\n"
+            "$form.StartPosition = 'CenterScreen'\n"
+            "$form.Size = New-Object System.Drawing.Size(620, 280)\n"
+            "$form.FormBorderStyle = 'FixedDialog'\n"
+            "$form.MaximizeBox = $false\n"
+            "$form.MinimizeBox = $false\n"
+            "$form.TopMost = $true\n"
+            "$form.BackColor = [System.Drawing.Color]::FromArgb(7, 20, 31)\n"
+            "$title = New-Object System.Windows.Forms.Label\n"
+            "$title.Text = 'Atualizando para a nova versao'\n"
+            "$title.ForeColor = [System.Drawing.Color]::White\n"
+            "$title.Font = New-Object System.Drawing.Font('Segoe UI', 20, [System.Drawing.FontStyle]::Bold)\n"
+            "$title.AutoSize = $true\n"
+            "$title.Location = New-Object System.Drawing.Point(28, 26)\n"
+            "$form.Controls.Add($title)\n"
+            "$subtitle = New-Object System.Windows.Forms.Label\n"
+            "$subtitle.Text = 'Fechando a versao anterior, instalando a nova e preparando a abertura automatica.'\n"
+            "$subtitle.ForeColor = [System.Drawing.Color]::FromArgb(220, 230, 242)\n"
+            "$subtitle.Font = New-Object System.Drawing.Font('Segoe UI', 10)\n"
+            "$subtitle.Size = New-Object System.Drawing.Size(550, 40)\n"
+            "$subtitle.Location = New-Object System.Drawing.Point(30, 72)\n"
+            "$form.Controls.Add($subtitle)\n"
+            "$progress = New-Object System.Windows.Forms.ProgressBar\n"
+            "$progress.Style = 'Marquee'\n"
+            "$progress.MarqueeAnimationSpeed = 25\n"
+            "$progress.Size = New-Object System.Drawing.Size(548, 26)\n"
+            "$progress.Location = New-Object System.Drawing.Point(30, 136)\n"
+            "$form.Controls.Add($progress)\n"
+            "$status = New-Object System.Windows.Forms.Label\n"
+            "$status.Text = 'Aplicando atualizacao automatica...'\n"
+            "$status.ForeColor = [System.Drawing.Color]::FromArgb(118, 228, 247)\n"
+            "$status.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)\n"
+            "$status.AutoSize = $true\n"
+            "$status.Location = New-Object System.Drawing.Point(30, 178)\n"
+            "$form.Controls.Add($status)\n"
+            "$null = $form.Show()\n"
+            "Start-Sleep -Seconds 2\n"
+            "$process = Start-Process -FilePath $installerPath -ArgumentList '/SP-','/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/FORCECLOSEAPPLICATIONS' -PassThru\n"
+            "while (-not $process.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 220 }\n"
+            "if ($process.ExitCode -eq 0) {\n"
+            "  if (Test-Path $noticeSource) { Copy-Item $noticeSource $noticeTarget -Force }\n"
+            "  $status.Text = 'Nova versao instalada. Abrindo o sistema...'\n"
+            "  [System.Windows.Forms.Application]::DoEvents()\n"
+            "  Start-Sleep -Milliseconds 900\n"
+            "  if (Test-Path $exePath) { Start-Process -FilePath $exePath }\n"
+            "}\n"
+            "$form.Close()\n",
+            encoding="utf-8",
+        )
+        subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", str(updater_script)])
         self.after(300, self.destroy)
 
-    def _prompt_update_package(self, package: UpdatePackage | None) -> None:
-        if package is None:
+    def _start_automatic_update(self, package: UpdatePackage) -> None:
+        if self.update_started:
             return
-        if not self.current_user:
-            return
+        self.update_started = True
+        self.pending_update = package
+        if self.splash is not None and self.splash.winfo_exists():
+            self.splash.update_visuals(
+                title=f"Atualizando para {package.version}",
+                subtitle="Troca automatica de versao em andamento",
+                status="Preparando a instalacao silenciosa da nova versao...",
+                progress=0.88,
+            )
+        self.after(700, lambda: self._install_update_package(package))
 
-        answer = messagebox.askyesno(
-            "Atualizacao disponivel",
-            f"Foi encontrada a versao {package.version}.\n\n{package.notes}\n\nDeseja atualizar agora?",
-            parent=self,
-        )
-        if answer:
-            self.status_label.configure(text=f"Atualizacao {package.version} encontrada. Instalando nova versao...")
-            self._install_update_package(package)
+    def _show_post_update_notice(self) -> None:
+        if not isinstance(self.post_update_notice, dict):
             return
-
-        self.status_label.configure(text=f"Atualizacao {package.version} identificada. Voce pode atualizar depois nas proximas aberturas do sistema.")
+        version = str(self.post_update_notice.get("version", APP_VERSION)).strip() or APP_VERSION
+        notes = str(self.post_update_notice.get("notes", "")).strip()
+        self.post_update_notice = None
+        self.whats_new_window = WhatsNewWindow(self, version, notes)
+        self.whats_new_window.grab_set()
 
     def _build_layout(self) -> None:
         self.grid_columnconfigure(1, weight=1)
@@ -1352,6 +1604,19 @@ class App(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
         )
         self.user_label.pack(anchor="e", pady=(0, 8))
+
+        self.check_update_button = ctk.CTkButton(
+            self.header_actions,
+            text="Verificar atualizacao",
+            width=140,
+            height=34,
+            corner_radius=12,
+            fg_color=self.theme["secondary"],
+            text_color="#FFFFFF",
+            hover_color=self.theme["secondary_hover"],
+            command=lambda: self._start_update_check(manual=True),
+        )
+        self.check_update_button.pack(anchor="e", pady=(0, 8))
 
         self.settings_button = ctk.CTkButton(
             self.header_actions,
@@ -1919,15 +2184,30 @@ class App(ctk.CTk):
                 self.status_label.configure(text=message)
                 self.progress_bar.set(ratio)
             elif kind == "update_progress":
-                self.status_label.configure(text=str(payload))
+                if isinstance(payload, tuple):
+                    message, ratio = payload
+                else:
+                    message, ratio = str(payload), None
+                if self.splash is not None and self.splash.winfo_exists() and not self.startup_ready:
+                    self.splash.update_visuals(status=message, progress=ratio)
+                else:
+                    self.status_label.configure(text=message)
             elif kind == "update_ready":
                 package = payload
                 self.pending_update = package
-                self.status_label.configure(text=f"Atualizacao {package.version} identificada. Escolha quando deseja instalar.")
-                self._prompt_update_package(package)
+                self._start_automatic_update(package)
+            elif kind == "manual_update_none":
+                self.status_label.configure(text=f"Nenhuma atualizacao encontrada. Versao atual: {payload}.")
+                self.progress_bar.set(0)
+                messagebox.showinfo("Atualizacao", f"O sistema ja esta na versao mais recente: {payload}.")
+            elif kind == "manual_update_error":
+                self.status_label.configure(text="Falha ao verificar atualizacao manualmente.")
+                self.progress_bar.set(0)
+                messagebox.showerror("Atualizacao", str(payload))
             elif kind == "update_error":
-                # Falha silenciosa para nao atrapalhar o uso do sistema.
-                pass
+                self._complete_startup()
+            elif kind == "startup_continue":
+                self._complete_startup()
             elif kind == "scan_done":
                 self.converter, tables = payload
                 self.all_tables = list(tables)
@@ -2074,6 +2354,7 @@ class App(ctk.CTk):
         self.preview_title.configure(text_color=self.theme["text"])
         self.preview_vertical_scrollbar.configure(activebackground=self.theme["accent"], bg=self.theme["surface_alt"], troughcolor=self.theme["app_bg"])
         self.preview_horizontal_scrollbar.configure(activebackground=self.theme["accent"], bg=self.theme["surface_alt"], troughcolor=self.theme["app_bg"])
+        self.check_update_button.configure(fg_color=self.theme["secondary"], hover_color=self.theme["secondary_hover"], text_color="#FFFFFF")
         self.settings_button.configure(fg_color=self.theme["surface_alt"], text_color=self.theme["text"], hover_color=self.theme["app_bg"])
         for metric in (self.metric_tables, self.metric_rows, self.metric_columns):
             metric.configure(text_color=self.theme["secondary"])
@@ -2121,7 +2402,7 @@ class App(ctk.CTk):
             ("Tocar som ao finalizar exportacao", sound_var),
             ("Ler estrutura automaticamente ao escolher o banco", auto_scan_var),
             ("Manter login salvo neste computador", remember_var),
-            ("Verificar atualizacoes ao abrir o sistema", auto_update_var),
+            ("Atualizar automaticamente ao abrir o sistema", auto_update_var),
         ):
             ctk.CTkCheckBox(
                 self.settings_window,
@@ -2146,7 +2427,7 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(
             self.settings_window,
-            text="Temas disponiveis: Oceano, Grafite, Aurora e Solar. Cada um muda a paleta e o contraste do layout. Para atualizar todos os computadores, use uma pasta compartilhada ou uma URL do GitHub Releases, por exemplo https://github.com/usuario/repositorio/releases/latest/download/ .",
+            text="Temas disponiveis: Oceano, Grafite, Aurora e Solar. Cada um muda a paleta e o contraste do layout. Ao abrir o sistema, a versao instalada verifica o feed configurado, entra no modo de atualizacao se houver novidade e instala a nova versao automaticamente.",
             text_color=self.theme["muted"],
             wraplength=420,
             justify="left",

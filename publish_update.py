@@ -18,6 +18,19 @@ DEFAULT_FEED = ROOT / app.UPDATE_FEED_DIRNAME
 GITHUB_API = "https://api.github.com"
 
 
+def release_notes() -> str:
+    configured = os.environ.get("VEXPER_RELEASE_NOTES", "").strip()
+    if configured:
+        return configured
+    return (
+        f"Novidades da versao {app.APP_VERSION}\n\n"
+        "- atualizacao automatica iniciada ao abrir o sistema\n"
+        "- tela visual de carregamento durante a troca de versao\n"
+        "- instalacao silenciosa da nova versao com abertura automatica ao finalizar\n"
+        "- exibicao de novidades apos concluir a atualizacao"
+    )
+
+
 def update_feed_dir() -> Path:
     configured = os.environ.get("VEXPER_UPDATE_FEED_DIR", "").strip()
     if configured:
@@ -62,7 +75,7 @@ def ensure_github_release(repo: str, tag: str) -> dict[str, object]:
     payload = {
         "tag_name": tag,
         "name": f"{app.APP_TITLE} {app.APP_VERSION}",
-        "body": f"Atualizacao automatica {app.APP_VERSION}",
+        "body": release_notes(),
         "draft": False,
         "prerelease": False,
         "generate_release_notes": False,
@@ -120,7 +133,7 @@ def main() -> None:
         "version": app.APP_VERSION,
         "installer_name": app.UPDATE_INSTALLER_NAME,
         "installer_location": app.UPDATE_INSTALLER_NAME,
-        "notes": f"Atualizacao automatica publicada em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
+        "notes": release_notes(),
         "published_at": datetime.now().isoformat(timespec="seconds"),
     }
     manifest_path = feed_dir / app.UPDATE_MANIFEST_NAME
